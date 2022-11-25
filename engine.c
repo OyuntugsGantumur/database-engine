@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <assert.h>
 
 typedef struct {
     char* name;
@@ -15,18 +16,22 @@ typedef struct {
     int num_rows;
     bool containsVar;
     char* primary_key;
+    char* primary_keys;
     void* root;
     void* cursor;
     struct Table* next; 
 } Table;
 
 typedef struct {
-    Table* head;                //A list of Tables????
+    Table* head;
     Table* tail;
+    int size;
     struct DP_primary* next;
 } DP_primary;
 
 DP_primary * dp_prim;
+DP_primary * dp_prim_root;
+const int SIZE = 500;
 
 /**
  * Returns the size of the corresponding data type
@@ -50,14 +55,14 @@ int find_size(char* input) {
 }
 
 /**
- * Creates a new table and stores 
+ * Creates a new table with the given variables 
  */
-void create_table(const char *table_name, const char *key, int length, ...) {
+Table* create_table(const char *table_name, const char *key, int length, ...) {
     
     va_list arg_list;
     va_start(arg_list, length); 
 
-    Table* table = malloc(sizeof(Table));               //Probably needs to be pointed by a dp_primary
+    Table* table = malloc(sizeof(Table));
     table->name = table_name;
     table->next = NULL;
     table->root = malloc(256 * sizeof(void));
@@ -66,19 +71,27 @@ void create_table(const char *table_name, const char *key, int length, ...) {
     table->attributes = malloc(length/2 * sizeof(char*));
     table->att_sizes = malloc(length/2 * sizeof(int));
     table->primary_key = key;
+    table->primary_keys = malloc(80 * sizeof(char));
     table->att_num = length/2;
     table->num_rows = 0;
     table->row_size = 0;
     table->containsVar = false;
 
-    //if the current dp_prim is full, create the next one.
-
+    //if the current dp_prim is full, create a new one.
     if(dp_prim->head == NULL) {
         dp_prim->head = table;
         dp_prim->tail = table;
-    } else {
+        dp_prim->size = 0;
+    } else if(dp_prim->size < SIZE) { 
         dp_prim->tail->next = table;
         dp_prim->tail = table; 
+    } else if (dp_prim->size >= SIZE) {
+        DP_primary* new_dp = malloc(sizeof(DP_primary));
+        new_dp->head = table;
+        new_dp->tail = table;
+        new_dp->size = 0;
+        dp_prim->next = new_dp;
+        dp_prim = dp_prim->next;
     }
 
     printf ("CREATE TABLE %s \n", table_name);
@@ -94,7 +107,7 @@ void create_table(const char *table_name, const char *key, int length, ...) {
 
         temp = va_arg(arg_list, char*);        
         strcpy(table->attribute_type[cntr], temp);
-        table->row_size += find_size(temp);                 //Defining the row_size here, but would be variable with varchar and real
+        table->row_size += find_size(temp);
         printf(" %s,\n", temp);
 
         if(strncmp(temp, "varchar", 7) == 0) {
@@ -105,6 +118,8 @@ void create_table(const char *table_name, const char *key, int length, ...) {
     printf (" PRIMARY KEY (%s)\n", key);
     printf (");\n");
     va_end(arg_list);
+
+    return table;
 }
 
 /**
@@ -113,30 +128,27 @@ void create_table(const char *table_name, const char *key, int length, ...) {
  * If a table with a given name doesn't exits, NULL pointer is returned. 
  */
 Table* find_table (char* table_name) {
-    Table* curr = dp_prim->head;
+    DP_primary* dp_curr = dp_prim_root;
 
-    while (true) {
-        if(strcmp(curr->name, table_name) == 0) {
-            return curr;
+    while(dp_curr != NULL) {
+        Table* curr = dp_curr->head;
+
+        while (curr != NULL) {
+            if(strcmp(curr->name, table_name) == 0) {
+                return curr;
+            }
+            curr = curr->next;
         }
 
-        curr = curr->next;
+        dp_curr = dp_curr->next;
     }
+
     return NULL;
 }
 
-// void serialize_row(Row* source, void* destination) {
-//   memcpy(destination + ID_OFFSET, &(source->id), ID_SIZE);
-//   memcpy(destination + USERNAME_OFFSET, &(source->username), USERNAME_SIZE);
-//   memcpy(destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
-// }
-
-// void deserialize_row(void* source, Row* destination) {
-//   memcpy(&(destination->id), source + ID_OFFSET, ID_SIZE);
-//   memcpy(&(destination->username), source + USERNAME_OFFSET, USERNAME_SIZE);
-//   memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
-// }
-
+/**
+ * Prints the information in the row starting at ptr
+ */
 void print_row(Table* table, void* ptr, void** temp) {
     for(int i = 0; i < table->att_num; i++) {
         if(strcmp(table->attribute_type[i], "smallint") == 0) {
@@ -152,42 +164,54 @@ void print_row(Table* table, void* ptr, void** temp) {
             printf("%s ", str);
             ptr += find_size(table->attribute_type[i]) * sizeof(char);
         }
-        else if (strncmp(table->attribute_type[i], "varchar", 7) == 0) {        //Not printing properly - could be insertion issue
+        else if (strncmp(table->attribute_type[i], "varchar", 7) == 0) {
             int len = *((int*)ptr);
-            ptr += sizeof(int*);
-            // char* str = (char*)ptr;
-            char* str;
-            // strncpy(str, (char*)ptr, len);
-            // printf("%s ", str);
-            printf("%s ", (char*)ptr);
+            ptr += sizeof(int); 
+            char* str = malloc(len * sizeof(char));
+            strncpy(str, (char*)ptr, len);
+            printf("%s ", str);
             ptr += len * sizeof(char);
-
-            // char* val = va_arg(arg_list, char*);
-            // int len = strlen(val);
-            // *((int *)temp) = len;
-            // temp += sizeof(int*);
-            // strcpy((char*)temp, val);
-            // printf("’%s’", (char*)temp);
-            // temp += len * sizeof(char);
+            free(str);
         }
     }
     *temp = ptr;
     printf("\n");
 }
 
+/**
+ * Prints the information in the specified table
+ */
 void print_table(Table* table) {
     void *ptr = table->root;
     void** temp = &ptr;
-    // printf("Value at root in printtable: %d\n", *((int*)(table->root)) );
-    printf("Printing table:\n");
+    printf("\nTable: %s\n", table->name);
     int row_cnt = 1;
     
     while(row_cnt <= table->num_rows) {
-        printf("Row num: %d\n", row_cnt);
         print_row(table, ptr, temp);      
         ptr = *temp;
         row_cnt++;
     }
+}
+
+/**
+ * Checks if an attribute is the primary key and 
+ * if so, checks if the value at the temp pointer already exists
+ * as a primary key and can't be added or updated.
+ */
+bool isPrimaryKeyExists(Table* table, int i, void* temp) {
+    if(strcmp(table->attributes[i], table->primary_key) == 0) {
+        if(strstr(table->primary_keys, (char*)temp) == NULL) {
+            strcat(table->primary_keys, (char*)temp);
+            strcat(table->primary_keys, ", ");
+            return false;
+        } else {
+            printf("\nNo primary key (%s) can be repeated. Please try again!\n", table->attributes[i]);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -203,7 +227,7 @@ void insert(char *table_name, int length, ...) {
         return;
     }
 
-    printf ("INSERT INTO %s VALUES (", table_name);
+    printf ("\nINSERT INTO %s VALUES (", table_name);
     void *temp = table->cursor;
         
     for(int i = 0; i < length; i++) {
@@ -211,18 +235,21 @@ void insert(char *table_name, int length, ...) {
 
             int val = va_arg(arg_list, int);
             *((int *)temp) = val;
-            // temp += sizeof(int*);
+            if(isPrimaryKeyExists(table, i, temp)) return;
+
             temp += 8;
+            dp_prim->size += 8;
             table->att_sizes[i] = 8;
-            // printf("PTR: %d", *((int *)temp));
-            // printf("%d", val);
-            printf("%d", *((int *)temp));                        
+            printf("%d", val);                 
 
         } else if(strcmp(table->attribute_type[i], "integer") == 0) {
 
             int val = va_arg(arg_list, int);
             *((int *)temp) = val;
-            temp += sizeof(int*);
+            if(isPrimaryKeyExists(table, i, temp)) return;
+
+            temp += 16;
+            dp_prim->size += 16;
             table->att_sizes[i] = 16;
             printf("%d", val);                               
 
@@ -230,8 +257,11 @@ void insert(char *table_name, int length, ...) {
         
             char* val = va_arg(arg_list, char*);
             strncpy((char*)temp, val, strlen(val));
+            if(isPrimaryKeyExists(table, i, temp)) return;
+
             int size = find_size(table->attribute_type[i]);
             temp += size * sizeof(char);
+            dp_prim->size += size;
             table->att_sizes[i] = size;
             printf("’%s’", val);
 
@@ -240,10 +270,12 @@ void insert(char *table_name, int length, ...) {
             char* val = va_arg(arg_list, char*);
             int len = strlen(val);
             *((int *)temp) = len;
-            temp += sizeof(int*);
-            strcpy((char*)temp, val);
+            temp += sizeof(int);
+            dp_prim->size += 32;
+            strncpy((char*)temp, val, len);
             printf("’%s’", (char*)temp);
             temp += len * sizeof(char);
+            dp_prim->size += len;
         }
 
         if(i < length-1) {
@@ -251,37 +283,10 @@ void insert(char *table_name, int length, ...) {
         }
     }
     printf (");\n");
-
-    //printing the inserted values                      //Could make a separate method
-    // void *ptr = table->cursor;
-    // for(int i = 0; i < length; i++) {
-    //     if(strcmp(table->attribute_type[i], "smallint") == 0) {
-    //         printf("%d\n", *((int*)ptr));
-    //         ptr += find_size(table->attribute_type[i]);
-    //     } 
-    //     else if(strcmp(table->attribute_type[i], "integer") == 0) {
-    //         printf("%d\n", *((int*)ptr));
-    //         ptr += find_size(table->attribute_type[i]);
-    //     } 
-    //     else if (strncmp(table->attribute_type[i], "char", 4) == 0) {
-    //         char* str = (char*)ptr;
-    //         printf("%s\n", str);
-    //         ptr += find_size(table->attribute_type[i]) * sizeof(char);
-    //     }
-    //     else if (strncmp(table->attribute_type[i], "varchar", 7) == 0) {
-    //         int len = *((int*)ptr);
-    //         ptr += sizeof(int*);
-    //         char* str = (char*)ptr;
-    //         printf("%s\n", str);
-    //         ptr += len;
-    //     }
-    // }
-
     print_row(table, table->cursor, &(table->cursor));
     
     table->cursor = temp;
     table->num_rows++;
-    // print_table(table);
 }
 
 /**
@@ -304,37 +309,32 @@ void* find_attribute_loc(Table* table, char* att_name) {
  * Checks if the specified row with row_num qualifies for the given condition
  * If the row qualifies the condition, the starting loc of the row is returned.
  * The condition is (att_name value) + sign(=, !=, <, >) + value
- */                                                                                                 //delete num_row
-bool is_row(Table* table, char* att_name, int value, char* sign, int row_num, void* temp) {         //Works only when the condition is comparing ints
-
-    
-    if(strcmp(sign, "=") == 0 && *((int*)temp) == value) {
-        return true;
-    }
+ */                                                                                                 
+bool is_row(Table* table, char* att_name, int value, char* sign, int row_num, void* temp) { 
+    if(strcmp(sign, "=") == 0 && *((int*)temp) == value) return true;
     else if(strcmp(sign, "!=") == 0 && *((int*)temp) != value) return true;
-    else if(strcmp(sign, ">") == 0 && *((int*)temp) > value) {
-        return true;
-    }
+    else if(strcmp(sign, ">") == 0 && *((int*)temp) > value) return true;
     else if(strcmp(sign, "<") == 0 && *((int*)temp) < value) return true;
     else if(strcmp(sign, " ") == 0) return true;
 
     return false;
 }
 
+/**
+ * Checks if the attribute in the row satisfies the given condition
+ */
 bool check_condition_var(Table* table, char* att_name, int filter, char* sign, int num_row, void* ptr) {
     void* temp = ptr;
 
-    // printf("VALUE: %d", *((int*)temp));
     for(int i = 0; i < table->att_num; i++) {
+
         if(strcmp(att_name, table->attributes[i]) == 0 && is_row(table, att_name, filter, sign, num_row, temp)) {
-            // *ptr = temp;
-            // printf("Cooooommeeee");
             return true;
         }
-        
+
         if(strncmp(table->attribute_type[i], "varchar", 7) == 0) {
             int len = *((int*)temp);
-            temp += sizeof(int*);
+            temp += sizeof(int);  
             temp += len;
         } 
         else {
@@ -345,6 +345,9 @@ bool check_condition_var(Table* table, char* att_name, int filter, char* sign, i
     return false;
 }
 
+/**
+ * Executes the update method
+ */
 void update_with_varchar(Table* table, char* att_name, int filter, char* sign,  int new_int, char* new_str, char* to_update) {
     void* ptr = table->root;
     int cntr = 0;
@@ -354,32 +357,31 @@ void update_with_varchar(Table* table, char* att_name, int filter, char* sign,  
 
         for(int k = 0; k < table->att_num; k++) {
             if(strcmp(table->attributes[k], to_update) == 0 && condition_checked) {
-                // printf("before: %d, %s, %d\n", *((int*)ptr), (char*)(ptr + 8), *((int*)(ptr + 38)));
 
                 if (new_int != NULL) {
-                    *((int*)(ptr)) = new_int;                      
+                    if(isPrimaryKeyExists(table, k, &new_int)) return;
+                    *((int*)(ptr)) = new_int;
                     ptr += find_size(table->attribute_type[k]);
                 } 
                 else if (new_str != NULL && strncmp(table->attribute_type[k], "char", 4) == 0) {
+                    if(isPrimaryKeyExists(table, k, &new_str)) return;
+                    
                     strcpy((char*)(ptr), new_str);
                     ptr += find_size(table->attribute_type[k]);
                 }
-                else if (new_str != NULL && strncmp(table->attribute_type[k], "varchar", 7) == 0) {         //What if the new value is longer than the initial
+                else if (new_str != NULL && strncmp(table->attribute_type[k], "varchar", 7) == 0) {
+                    if(isPrimaryKeyExists(table, k, &new_str)) return;
                     int len = *((int*)ptr);
-                    ptr += sizeof(int*);
+                    ptr += sizeof(int);
                     char* str = (char*)ptr;
-                    // printf("BEEEEfore: %s\n", str);
                     strcpy((char*)(ptr), new_str);
-                    // printf("AAAAFter: %s\n", (char*)(ptr));
                     ptr += len;
                 }
-
-                // printf("after: %d, %s, %d\n", *((int*)loc), (char*)(loc + 8), *((int*)(loc + 38)));
             
             } else {
                 if(strncmp(table->attribute_type[k], "varchar", 7) == 0) {
                     int len = *((int*)ptr);
-                    ptr += sizeof(int*);
+                    ptr += sizeof(int);
                     ptr += len;
                 } else {
                     ptr += table->att_sizes[k];
@@ -392,33 +394,27 @@ void update_with_varchar(Table* table, char* att_name, int filter, char* sign,  
 }
 
 /**
- * 
+ * Executes the update method if the table doesn't include varchar type
  */
 void execute_update(Table* table, char* att_name, int filter, char* sign, int offset,  int new_int, char* new_str) {
     for(int i = 0; i < table->num_rows; i++) {
         void* temp = find_attribute_loc(table, att_name);
-        // printf("BEFORE add: %d\n", *((int*)temp));
         temp = temp + (i * (table->row_size));
-        // printf("After add: %d\n", *((int*)temp));
 
         if(is_row(table, att_name, filter, sign, i, temp) == true) {
-            // printf("HERE at %d\n", i);
             void* loc = table->root + i * table->row_size;
-            printf("before: %d, %s, %d\n", *((int*)loc), (char*)(loc + 8), *((int*)(loc + 38)));
 
             if (new_int != NULL) {
                 *((int*)(loc + offset)) = new_int;                     
             } else if (new_str != NULL) {
                 strcpy((char*)(loc+offset), new_str);
             }
-
-            printf("after: %d, %s, %d\n", *((int*)loc), (char*)(loc + 8), *((int*)(loc + 38)));
         }
     }
 }
 
 /**
- * 
+ * Reads in the input for the update function
  */
 void update(const char *table_name, int length, ...) {
     va_list arg_list;
@@ -435,7 +431,7 @@ void update(const char *table_name, int length, ...) {
     int offset;
     int new_int = NULL;
     char* new_str = NULL;
-    printf ("UPDATE %s SET ", table_name);
+    printf ("\nUPDATE %s SET ", table_name);
     printf ("%s = ", temp);
 
     offset = 0;
@@ -493,7 +489,7 @@ char* find_data_type(Table* table, char *att_name, int* offset) {
             return table->attribute_type[i];
         }
 
-        temp += table->att_sizes[i];                //How to add the sizes for varchars?????????
+        temp += table->att_sizes[i];            
     }
     return "";
 }
@@ -517,7 +513,9 @@ char** prepare_select_statement(char* input, int* length) {
     }
     return list;
 }
-
+/**
+ * Checks if an attribute is in the select statement
+ */
 bool select_contains(char** list, char* type, int length) {
     for(int i = 0; i < length; i++) {
         if(strcmp(list[i], type) == 0) {
@@ -528,34 +526,41 @@ bool select_contains(char** list, char* type, int length) {
     return false;
 }
 
+/**
+ * Increments the pointer by the corresponding size of the data type.
+ */
 void incr_pointer(Table* table, int k, void* ptr, void** ret) {
     if(strncmp(table->attribute_type[k], "char", 4) == 0) {
         ptr += table->att_sizes[k];
         
-    } else if(strcmp(table->attribute_type[k], "smallint") == 0 || strcmp(table->attribute_type[k], "integer") == 0) {
-        ptr += 8;       //different for integer!
-        
+    } else if(strcmp(table->attribute_type[k], "smallint") == 0) {
+        ptr += 8;
+    } else if(strcmp(table->attribute_type[k], "integer") == 0) {
+        ptr += 16;
     } else if(strncmp(table->attribute_type[k], "varchar", 7) == 0) {
         int len = *((int*)ptr);
-        ptr += sizeof(int*);
+        ptr += sizeof(int);
         ptr += len;
     }
 
     *ret = ptr;
 }
 
+/**
+ * Executes the select statement
+ */
 void select_with_varchar(Table* table, char* att_name, int filter, char* sign, char** input, int length) {
     void* ptr = table->root;
     
     for(int i = 0; i < table->num_rows; i++) {
+        
         bool condition_checked = check_condition_var(table, att_name, filter, sign, i, ptr);
-
         for(int k = 0; k < table->att_num; k++) {
 
             if(!condition_checked) {
                 incr_pointer(table, k, ptr, &ptr);
             } else {
-
+                
                 if(select_contains(input, table->attributes[k], length)) {
                     if(strncmp(table->attribute_type[k], "char", 4) == 0) {
                         printf("%s ", (char*)ptr);
@@ -564,9 +569,8 @@ void select_with_varchar(Table* table, char* att_name, int filter, char* sign, c
                         printf("%d ", *((int*)ptr));
                         ptr += table->att_sizes[k];
                     } else if(strncmp(table->attribute_type[k], "varchar", 7) == 0) {
-
                         int len = *((int*)ptr);
-                        ptr += sizeof(int*);
+                        ptr += sizeof(int);
                         char* str = (char*)ptr;
                         printf("%s ", str);
                         ptr += len;
@@ -582,7 +586,7 @@ void select_with_varchar(Table* table, char* att_name, int filter, char* sign, c
 }
 
 /**
- * Prints the values of the selected attributes.
+ * Executes the select statement
  */
 void execute_select(Table* table, char* att_name, int filter, char* sign, char** input, int length) {
     
@@ -608,6 +612,9 @@ void execute_select(Table* table, char* att_name, int filter, char* sign, char**
     }
 }
 
+/**
+ * Reads in the select statement and calls corresponding methods
+ */
 void select(const char *table_name, int length, ...) {
     int len = 0;
     char** to_print_atts;
@@ -624,13 +631,21 @@ void select(const char *table_name, int length, ...) {
     char* temp = va_arg(arg_list, char*);
 
     if(strcmp(temp, "*") == 0) {
-        to_print_atts = table->attributes;
         len = table->att_num;
+        to_print_atts = (char**) malloc (table->att_num * sizeof (char*));
+        char** temp = to_print_atts;
+        int m = 0;
+        while(m < table->att_num) {
+            *temp = (char*) malloc (strlen(table->attributes[m]) * sizeof(char));
+            *temp = table->attributes[m];
+            temp++;
+            m++;
+        }
     } else {
         to_print_atts = prepare_select_statement(temp, &len);
     }
     
-    printf ("SELECT %s\n", temp);
+    printf ("\nSELECT %s\n", temp);
     printf (" FROM %s\n", table_name);
 
     if (length == 1) {
@@ -645,7 +660,7 @@ void select(const char *table_name, int length, ...) {
         
         printf ("WHERE %s;\n", condition);
 
-        if(table->containsVar) {
+        if(table->containsVar) {            
             select_with_varchar(table, att, value, symbol, to_print_atts, len);
         } else {
             execute_select(table, att, value, symbol, to_print_atts, len);
@@ -653,52 +668,116 @@ void select(const char *table_name, int length, ...) {
         
     }
 
-    free(to_print_atts);            //Need to free the inner mallocs
+    free(to_print_atts);
+}
+
+void free_all() {
+    DP_primary* dp_curr = dp_prim_root;
+
+    while(dp_curr != NULL) {
+        Table* curr_table = dp_curr->head;
+
+        while(curr_table != NULL) {            
+
+            for(int i = 0; i < curr_table->att_num; i++) {     
+                free(curr_table->attributes[i]);
+                free(curr_table->attribute_type[i]);
+            }
+
+            free(curr_table->att_sizes);            
+            free(curr_table->attributes);
+            free(curr_table->attribute_type);
+            free(curr_table->primary_keys);
+            free(curr_table->root);
+
+            Table* temp = curr_table->next; 
+            free(curr_table);
+            curr_table = temp;
+        }
+
+        DP_primary* temp = dp_curr->next;
+        free(dp_curr); 
+        dp_curr = temp;
+    }
+
+    printf("All memory freed!\n");
 }
 
 int main() {
-    dp_prim = malloc(sizeof(DP_primary));
-    dp_prim->head = NULL;
-    dp_prim->tail = NULL;
+    dp_prim_root = malloc(sizeof(DP_primary));
+    dp_prim_root->head = NULL;
+    dp_prim_root->tail = NULL;
+    dp_prim = dp_prim_root;
 
-    // create_table("movies", "id", 6,
-    //             "id", "smallint",
-    //             "title", "char(30)",
-    //             "length", "smallint" );
-    
-    // insert("movies", 3, 1, "Lyle, Lyle, Crocodile", 100);
-    // insert("movies", 3, 2, "Big Bang Theory", 50);
-    
-    // create_table("classes", "id", 6,
-    //             "id", "smallint",
-    //             "year", "smallint",
-    //             "name", "char(30)" );
-
-    // insert("classes", 3, 1, 2020, "Intro to CS");
-    // insert("classes", 3, 2, 2021, "Data structures and algorithms");
-
-    // // insert("movies", 3, 3, "Harry Porter", 70);
-
-    // // update("movies", 3, "length", 150, "id = 1");
-    // // update("movies", 3, "title", "Friends", "id = 2");
-
-    // // select("movies", 2, "title, length", "length < 200");
-    // // select("movies", 2, "*", "length > 60");
-    // select("classes", 2, "id, name", "year > 2010");
-    // select("classes", 2, "*", "year < 2022");
-
-    create_table("movies", "id", 6,
+    //Testing the insertion for all variables
+    Table* table_movies = create_table("movies", "id", 8,
                 "id", "smallint",
-                "title", "varchar(30)",
-                "length", "smallint" );
+                "title", "char(30)",
+                "studio", "varchar(40)",
+                "length", "integer");
+    
+    insert("movies", 4, 1, "Three Idiots", "Paramount", 20);
+    insert("movies", 4, 2, "Big Bang Theory", "Walt Disney Studios", 300);
+    insert("movies", 4, 3, "Lord of the Rings", "Universal Pictures", 50);
+    insert("movies", 4, 3, "Harry Potter", "Universal Pictures", 50);  //should not be added - works
+    insert("movies", 4, 4, "About Time", "Warner Bros", 30);
+    print_table(find_table("movies"));
 
-    insert("movies", 3, 1, "Cuckoo's nest", 100);
-    insert("movies", 3, 2, "Big Bang Theory", 50);
-    insert("movies", 3, 3, "Loook both ways", 200);
-    insert("movies", 3, 4, "Eternal Sunshine", 70);
-    update("movies", 3, "title", "Friends", "id = 2");
-    update("movies", 3, "length", 20, "id = 2");
-    // select("movies", 2, "title, length", "length < 80");
-    // select("movies", 2, "title, length", "length != 100");
-    // select("movies", 2, "*", "length > 90");
+    //Testing the select functionality for all variables
+    select("movies", 2, "title, length", "length < 40");
+    select("movies", 2, "*", "length > 10");
+    select("movies", 2, "id, title, studio", "id > 2");
+    select("movies", 2, "id, title", "length = 100");  //edge case: should be empty - works
+    select("movies", 2, "title, studio, length", "length != 30");
+
+    //Testing the update functioinalities 
+    update("movies", 3, "length", 80, "id = 1");          //updating integer
+    update("movies", 3, "id", 5, "id = 4");                //updating smallint
+    update("movies", 3, "title", "Bridgerton", "id = 3");  //updating char(n)
+    update("movies", 3, "studio", "20th Century", "length = 50");   //updating varchar(n)
+
+    //updating the same variable multiple times - works
+    update("movies", 3, "title", "Friends", "id = 3");
+    update("movies", 3, "title", "Euphoria", "id = 3");
+
+    //updating the primary key with pre-existing value
+    update("movies", 3, "id", 2, "id = 3");   //shouldn't be added - works
+
+
+    //Testing of multiples tables
+    create_table("classes", "id", 6,
+                "id", "smallint",
+                "year", "integer",
+                "name", "char(30)" );
+
+    insert("classes", 3, 1, 2020, "Intro to CS");
+    insert("classes", 3, 2, 2021, "Data structures and algorithms");
+    insert("classes", 3, 3, 2010, "Artifical Intelligence");
+    print_table(find_table("classes"));
+
+    select("classes", 2, "name, year", "year > 2020");
+    select("classes", 2, "*", "year < 2019");
+    select("classes", 2, "*", "id < 3");
+
+    update("classes", 3, "year", 2022, "year = 2021");
+    update("classes", 3, "name", "Machine Learning", "id = 3");
+
+
+    create_table("dorms", "id", 6,
+                "id", "smallint",
+                "name", "char(40)",
+                "capacity", "integer" );
+    
+    insert("dorms", 3, 1, "Watson Courts", 50);
+    insert("dorms", 3, 2, "South College", 150);
+    insert("dorms", 3, 3, "Ruef Hall", 200);
+    print_table(find_table("dorms"));
+
+    select("dorms", 2, "name, capacity", "capacity > 100");
+    select("dorms", 2, "*", "id < 3");
+
+    update("dorms", 3, "capacity", 180, "id = 3");
+    update("dorms", 3, "name", "Keefe Hall", "capacity = 150");
+
+    free_all();
 }
